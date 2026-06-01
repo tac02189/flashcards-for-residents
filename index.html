@@ -367,6 +367,13 @@ function updateSRS(id, q) {
   S.srs[id] = s;
   saveSRS();
 }
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 function nextIntervals(id) {
   const s = getSRS(id);
   const nextI = s.reps < 1 ? 1 : s.reps < 2 ? 6 : Math.round(s.interval * s.ef);
@@ -696,10 +703,9 @@ function startSession() {
   document.getElementById('session-view').style.display = 'block';
   if (S.mode === 'teach') runTeach(cards);
   else {
-    const neverSeen = cards.filter(c => !S.srs[c.id]);
-    const due       = cards.filter(c =>  S.srs[c.id] && isDue(c));
-    const notDue    = cards.filter(c =>  S.srs[c.id] && !isDue(c))
-                           .sort((a, b) => getSRS(a.id).due - getSRS(b.id).due);
+    const neverSeen = shuffle(cards.filter(c => !S.srs[c.id]));
+    const due       = shuffle(cards.filter(c =>  S.srs[c.id] && isDue(c)));
+    const notDue    = shuffle(cards.filter(c =>  S.srs[c.id] && !isDue(c)));
     runStudy([...neverSeen, ...due, ...notDue]);
   }
 }
