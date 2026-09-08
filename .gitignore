@@ -11,3 +11,6 @@ secrets/
 firebase-debug.log
 .DS_Store
 Thumbs.db
+
+# Machine-local Claude Code permissions (*.local does not match a .json suffix)
+.claude/settings.local.json
