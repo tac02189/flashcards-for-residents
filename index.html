@@ -298,7 +298,13 @@ input[type=file]{display:none}
 
 <script>
 // ── Config ────────────────────────────────────────────────────────────────
-const DEFAULT_CSV = 'Foundations 2022.csv';
+// Decks every visitor starts with. `file` is the CSV beside this page and also
+// keys each card's saved progress, so never rename a file once it has shipped;
+// `name` is what the app shows.
+const DEFAULT_DECKS = [
+  { file: 'Foundations 2022.csv',         name: 'Foundations 2022' },
+  { file: 'Tintinalli_EM_Flashcards.csv', name: 'Tintinalli' }
+];
 
 // ── Constants ─────────────────────────────────────────────────────────────
 const UNCATEGORIZED  = 'Uncategorized';
@@ -317,7 +323,7 @@ const S = {
 };
 
 function saveDecks() {
-  try { localStorage.setItem('fc_decks', JSON.stringify(S.decks)); } catch(e) {}
+  try { localStorage.setItem('fc_decks', JSON.stringify(S.decks)); return true; } catch(e) { return false; }
 }
 function saveSRS() {
   try { localStorage.setItem('fc_srs', JSON.stringify(S.srs)); } catch(e) {}
@@ -339,6 +345,13 @@ function allCats() {
   const s = new Set();
   allCards().forEach(c => s.add(c.cat || UNCATEGORIZED));
   return [...s].sort();
+}
+// The deck built from this CSV, even renamed: its card ids start with the filename
+function deckFromFile(file) {
+  return S.decks.find(d => {
+    const c = d.cards && d.cards[0];
+    return !!c && typeof c.id === 'string' && c.id.startsWith(file + '_');
+  });
 }
 function getSRS(id) {
   return S.srs[id] || {ef:2.5, interval:1, reps:0, due:0};
@@ -476,10 +489,11 @@ function loadFile(file) {
     const cards = parseCSV(ev.target.result, file.name);
     if (!cards) { showFileError('Could not parse "' + file.name + '" — check it has question and answer columns.'); return; }
     const name = file.name.replace(/\.csv$/i, '');
-    const idx  = S.decks.findIndex(d => d.name === name);
-    if (idx >= 0) S.decks[idx].cards = cards;
-    else S.decks.push({name, cards});
-    S.selDecks.add(name);
+    // Re-uploading a file updates its deck, even one renamed or loaded as a default
+    let deck = deckFromFile(file.name) || S.decks.find(d => d.name === name);
+    if (deck) deck.cards = cards;
+    else S.decks.push(deck = {name, cards});
+    S.selDecks.add(deck.name);
     cards.forEach(c => S.selCats.add(c.cat || UNCATEGORIZED));
     saveDecks();
     renderDecks();
@@ -957,25 +971,62 @@ function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// ── Default CSV Auto-load ─────────────────────────────────────────────────
+// ── Default Deck Auto-load ────────────────────────────────────────────────
 // Works over HTTP/HTTPS; silently skipped on file:// protocol.
-function loadDefaultCSV() {
-  if (!DEFAULT_CSV) return;
-  const name = DEFAULT_CSV.replace(/\.csv$/i, '');
-  if (S.decks.find(d => d.name === name)) return;
-  fetch('./' + DEFAULT_CSV.split('/').map(encodeURIComponent).join('/'))
-    .then(r => { if (!r.ok) throw new Error('not found'); return r.text(); })
-    .then(text => {
-      const cards = parseCSV(text, DEFAULT_CSV);
-      if (!cards) return;
-      S.decks.push({ name, cards });
-      S.selDecks.add(name);
-      cards.forEach(c => S.selCats.add(c.cat || UNCATEGORIZED));
-      saveDecks();
-      renderDecks();
-      showTab('study');
-    })
-    .catch(() => {});
+// Each default is added once per browser, so a deck the user removes stays
+// removed, unless they remove every deck, which brings all the defaults back.
+function loadDefaultDecks() {
+  const firstRun = !S.decks.length;
+  let seen = null;
+  try { seen = JSON.parse(localStorage.getItem('fc_defaults_seen')); } catch(e) {}
+  // Before this list existed, Foundations 2022 was the only default, and every
+  // browser that already holds decks was given it on its first visit.
+  if (firstRun)                  seen = [];
+  else if (!Array.isArray(seen)) seen = ['Foundations 2022.csv'];
+  const seenSet  = new Set(seen);
+  const saveSeen = () => {
+    try { localStorage.setItem('fc_defaults_seen', JSON.stringify([...seenSet])); } catch(e) {}
+  };
+
+  // Deck names must stay unique, so a default whose name another deck holds waits until it is free
+  const nameTaken = def => S.decks.some(d => d.name === def.name);
+
+  const todo = DEFAULT_DECKS.filter(def => {
+    if (deckFromFile(def.file)) { seenSet.add(def.file); return false; } // already here, even uploaded by hand
+    return !seenSet.has(def.file) && !nameTaken(def);
+  });
+  if (!todo.length) { saveSeen(); return; }
+
+  Promise.all(todo.map(def =>
+    fetch('./' + def.file.split('/').map(encodeURIComponent).join('/'))
+      .then(r => { if (!r.ok) throw new Error('not found'); return r.text(); })
+      .then(text => parseCSV(text, def.file))
+      .catch(() => null)
+  )).then(results => {
+    // Categories already on screen keep the user's picks; the rest of a new deck's start selected
+    const shownCats = new Set(allCards().filter(c => S.selDecks.has(c.deckName)).map(c => c.cat || UNCATEGORIZED));
+    let added = 0;
+    results.forEach((cards, i) => {
+      const def = todo[i];
+      if (!cards) return;                                             // not fetched (offline, file://): try again next visit
+      if (deckFromFile(def.file)) { seenSet.add(def.file); return; } // uploaded by hand while the fetch was in flight
+      if (nameTaken(def)) return;                                     // name taken meanwhile: try again next visit
+      S.decks.push({ name: def.name, cards });
+      S.selDecks.add(def.name);
+      cards.forEach(c => { const cat = c.cat || UNCATEGORIZED; if (!shownCats.has(cat)) S.selCats.add(cat); });
+      seenSet.add(def.file);
+      added++;
+    });
+    // Mark decks seen only once they are stored: with localStorage full they
+    // still show this visit, and the next visit retries instead of losing them
+    if (!added || saveDecks()) saveSeen();
+    if (!added) return;
+    renderDecks();
+    if (_studyState || _teachActive) return; // never pull the view out from under a session
+    if (firstRun) showTab('study');
+    else if (document.getElementById('panel-study').classList.contains('active'))    renderSetup();
+    else if (document.getElementById('panel-progress').classList.contains('active')) renderProgress();
+  });
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
@@ -989,8 +1040,8 @@ if (S.decks.length > 0) {
 } else {
   document.getElementById('panel-decks').classList.add('active');
   document.getElementById('tab-decks').classList.add('active');
-  loadDefaultCSV();
 }
+loadDefaultDecks();
 </script>
 </body>
 </html>

@@ -12,7 +12,7 @@ A single-file flashcard study app with spaced repetition, built for CSV-based de
 - **Teaching mode** — Browse all cards with answers visible. Good for a first pass through new material.
 - **Category filtering** — Cards are grouped by category. Select which categories to include before starting a session.
 - **Progress tracking** — Per-category performance bars showing Again / Hard / Good / Easy breakdown.
-- **Auto-load** — If a CSV is placed in the same folder as the HTML, it loads automatically on first visit.
+- **Default decks** — The CSVs listed in `DEFAULT_DECKS` load automatically, so a first visit opens ready to study. Ships with *Foundations 2022* and *Tintinalli*.
 - **Persistent** — Progress is saved to `localStorage`. Returning to the page picks up where you left off.
 - **Dark mode** — Follows system preference.
 
@@ -40,25 +40,33 @@ What year did WWII end?, 1945, History
 
 1. Fork this repo
 2. Drop your CSV into the repo root
-3. Update `DEFAULT_CSV` at the top of `flashcards.html` to match the filename
+3. Add it to `DEFAULT_DECKS` at the top of `index.html`
 4. Enable GitHub Pages → Settings → Pages → Deploy from branch: `main` / root
 5. Share the Pages URL
 
 ### Local
 
-Open `flashcards.html` directly in a browser. Auto-load won't work over `file://` (browser security restriction), but you can drag and drop any CSV onto the upload zone.
+Open `index.html` directly in a browser. Auto-load won't work over `file://` (browser security restriction), but you can drag and drop any CSV onto the upload zone.
 
 ---
 
 ## Adding or Swapping Decks
 
-To change the default deck, edit the top of `flashcards.html`:
+To change the default decks, edit the top of `index.html`:
 
 ```js
-const DEFAULT_CSV = 'your-deck.csv';
+const DEFAULT_DECKS = [
+  { file: 'Foundations 2022.csv',         name: 'Foundations 2022' },
+  { file: 'Tintinalli_EM_Flashcards.csv', name: 'Tintinalli' }
+];
 ```
 
-Set to `''` to disable auto-load and always show the upload zone instead.
+- `file` is the CSV in the repo root and the deck's identity. Card ids, and so saved progress, are built from it, and it is how the app recognizes the deck under any name: a default is not added over a copy the user uploaded by hand, and uploading the file again updates the existing deck instead of adding a second one. **Never rename a file once it has shipped.**
+- `name` is what the app displays.
+- Each browser receives each default once. A deck added to the list later reaches returning users on their next visit; a default the user removes stays removed, unless they remove every deck, which brings all the defaults back.
+- A deck already loaded in a browser is not refreshed when its CSV changes, so a fix to a shipped deck reaches only browsers that have not loaded it yet.
+
+Set to `[]` to disable auto-load and always show the upload zone instead.
 
 Multiple decks can be loaded manually via the upload zone and studied together or separately.
 
