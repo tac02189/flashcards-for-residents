@@ -300,10 +300,14 @@ input[type=file]{display:none}
 // ── Config ────────────────────────────────────────────────────────────────
 // Decks every visitor starts with. `file` is the CSV beside this page and also
 // keys each card's saved progress, so never rename a file once it has shipped;
-// `name` is what the app shows.
+// `name` is what the app shows. Count up `version` with every change to the
+// CSV, so browsers that already hold the deck replace its cards on their next
+// visit. Edit cards in place and add new ones at the end: a card's id is its
+// row, so never insert, delete or reorder rows (README: Correcting a deck that
+// has shipped). Each CSV must open with its header row, question,answer,category.
 const DEFAULT_DECKS = [
-  { file: 'Foundations 2022.csv',         name: 'Foundations 2022' },
-  { file: 'Tintinalli_EM_Flashcards.csv', name: 'Tintinalli' }
+  { file: 'Foundations 2022.csv',         name: 'Foundations 2022', version: 1 },
+  { file: 'Tintinalli_EM_Flashcards.csv', name: 'Tintinalli',       version: 1 }
 ];
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -326,7 +330,7 @@ function saveDecks() {
   try { localStorage.setItem('fc_decks', JSON.stringify(S.decks)); return true; } catch(e) { return false; }
 }
 function saveSRS() {
-  try { localStorage.setItem('fc_srs', JSON.stringify(S.srs)); } catch(e) {}
+  try { localStorage.setItem('fc_srs', JSON.stringify(S.srs)); return true; } catch(e) { return false; }
 }
 function saveToStorage() { saveDecks(); saveSRS(); }
 
@@ -346,12 +350,25 @@ function allCats() {
   allCards().forEach(c => s.add(c.cat || UNCATEGORIZED));
   return [...s].sort();
 }
-// The deck built from this CSV, even renamed: its card ids start with the filename
+// Whether a deck was built from this CSV, even renamed: its card ids start with the filename
+function isFromFile(d, file) {
+  const c = d.cards && d.cards[0];
+  return !!c && typeof c.id === 'string' && c.id.startsWith(file + '_');
+}
 function deckFromFile(file) {
-  return S.decks.find(d => {
-    const c = d.cards && d.cards[0];
-    return !!c && typeof c.id === 'string' && c.id.startsWith(file + '_');
+  return S.decks.find(d => isFromFile(d, file));
+}
+// Swap in a deck's cards from a changed CSV. Progress stays with each card id,
+// but a studied card whose question or answer changed starts over with a fresh
+// schedule that is due at once, so the correction gets studied instead of
+// waiting out an interval earned on the old text.
+function replaceCards(deck, cards) {
+  const before = new Map(deck.cards.map(c => [c.id, c]));
+  cards.forEach(c => {
+    const old = before.get(c.id);
+    if (S.srs[c.id] && !(old && old.q === c.q && old.a === c.a)) S.srs[c.id] = {ef:2.5, interval:1, reps:0, due:0};
   });
+  deck.cards = cards;
 }
 function getSRS(id) {
   return S.srs[id] || {ef:2.5, interval:1, reps:0, due:0};
@@ -489,9 +506,10 @@ function loadFile(file) {
     const cards = parseCSV(ev.target.result, file.name);
     if (!cards) { showFileError('Could not parse "' + file.name + '" — check it has question and answer columns.'); return; }
     const name = file.name.replace(/\.csv$/i, '');
-    // Re-uploading a file updates its deck, even one renamed or loaded as a default
+    // Re-uploading a file updates its deck, even one renamed or loaded as a default.
+    // Which version an upload holds is unknown, so if it is a default's CSV, the next visit replaces it with the shipped one.
     let deck = deckFromFile(file.name) || S.decks.find(d => d.name === name);
-    if (deck) deck.cards = cards;
+    if (deck) { deck.cards = cards; delete deck.version; }
     else S.decks.push(deck = {name, cards});
     S.selDecks.add(deck.name);
     cards.forEach(c => S.selCats.add(c.cat || UNCATEGORIZED));
@@ -975,6 +993,21 @@ function esc(s) {
 // Works over HTTP/HTTPS; silently skipped on file:// protocol.
 // Each default is added once per browser, so a deck the user removes stays
 // removed, unless they remove every deck, which brings all the defaults back.
+// A default the browser holds is updated in place when its `version` changes,
+// so a corrected CSV reaches browsers that loaded an earlier one.
+
+// A default's CSV, parsed; null when it cannot be fetched (offline, file://) or
+// what comes back is not the CSV. A default CSV opens with its header row, so a
+// login, block or error page answered in its place is never taken for the deck.
+function fetchDefault(def) {
+  // A versioned URL, revalidated, so no cache can answer with an earlier CSV
+  const url = './' + def.file.split('/').map(encodeURIComponent).join('/') + '?v=' + encodeURIComponent(def.version);
+  return fetch(url, { cache: 'no-cache' })
+    .then(r => { if (!r.ok) throw new Error('not found'); return r.text(); })
+    .then(text => /^\s*"?question/i.test(text) ? parseCSV(text, def.file) : null)
+    .catch(() => null);
+}
+
 function loadDefaultDecks() {
   const firstRun = !S.decks.length;
   let seen = null;
@@ -990,38 +1023,45 @@ function loadDefaultDecks() {
 
   // Deck names must stay unique, so a default whose name another deck holds waits until it is free
   const nameTaken = def => S.decks.some(d => d.name === def.name);
+  // Decks built from a default's CSV that hold another version of it, or an unknown one
+  const outdated  = def => S.decks.filter(d => isFromFile(d, def.file) && d.version !== def.version);
 
   const todo = DEFAULT_DECKS.filter(def => {
-    if (deckFromFile(def.file)) { seenSet.add(def.file); return false; } // already here, even uploaded by hand
+    if (deckFromFile(def.file)) { seenSet.add(def.file); return outdated(def).length > 0; } // already here, even uploaded by hand
     return !seenSet.has(def.file) && !nameTaken(def);
   });
   if (!todo.length) { saveSeen(); return; }
 
-  Promise.all(todo.map(def =>
-    fetch('./' + def.file.split('/').map(encodeURIComponent).join('/'))
-      .then(r => { if (!r.ok) throw new Error('not found'); return r.text(); })
-      .then(text => parseCSV(text, def.file))
-      .catch(() => null)
-  )).then(results => {
-    // Categories already on screen keep the user's picks; the rest of a new deck's start selected
+  Promise.all(todo.map(fetchDefault)).then(results => {
+    // Categories already on screen keep the user's picks; the rest of a new or updated deck's start selected
     const shownCats = new Set(allCards().filter(c => S.selDecks.has(c.deckName)).map(c => c.cat || UNCATEGORIZED));
-    let added = 0;
+    let changed = 0;
     results.forEach((cards, i) => {
       const def = todo[i];
-      if (!cards) return;                                             // not fetched (offline, file://): try again next visit
-      if (deckFromFile(def.file)) { seenSet.add(def.file); return; } // uploaded by hand while the fetch was in flight
-      if (nameTaken(def)) return;                                     // name taken meanwhile: try again next visit
-      S.decks.push({ name: def.name, cards });
-      S.selDecks.add(def.name);
+      if (!cards) return;                                // not fetched (offline, file://): try again next visit
+      if (deckFromFile(def.file)) {
+        // Updated in place, so the deck keeps its name, its place and its selection
+        const decks = outdated(def);
+        if (!decks.length) return;
+        decks.forEach(d => { replaceCards(d, cards); d.version = def.version; });
+        seenSet.add(def.file);                           // also covers a hand upload made while the fetch was in flight
+      } else {
+        if (seenSet.has(def.file)) return;               // removed while the fetch was in flight: it stays removed
+        if (nameTaken(def)) return;                      // name taken meanwhile: try again next visit
+        S.decks.push({ name: def.name, cards, version: def.version });
+        S.selDecks.add(def.name);
+        seenSet.add(def.file);
+      }
       cards.forEach(c => { const cat = c.cat || UNCATEGORIZED; if (!shownCats.has(cat)) S.selCats.add(cat); });
-      seenSet.add(def.file);
-      added++;
+      changed++;
     });
     // Mark decks seen only once they are stored: with localStorage full they
-    // still show this visit, and the next visit retries instead of losing them
-    if (!added || saveDecks()) saveSeen();
-    if (!added) return;
-    renderDecks();
+    // still show this visit, and the next visit retries instead of losing them.
+    // An updated deck stores its version with its cards, and only after the
+    // progress resets it needs, so a failed write is retried in full too.
+    if (!changed || (saveSRS() && saveDecks())) saveSeen();
+    if (!changed) return;
+    if (!document.querySelector('.deck-name-input')) renderDecks(); // a rename in progress re-renders the list when it ends
     if (_studyState || _teachActive) return; // never pull the view out from under a session
     if (firstRun) showTab('study');
     else if (document.getElementById('panel-study').classList.contains('active'))    renderSetup();
