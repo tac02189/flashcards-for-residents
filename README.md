@@ -98,7 +98,7 @@ Progress the app cannot place counts as fresh too: the card starts over rather t
 
 Progress already stamped with a copy's own text keeps counting for that copy, even where other copies disagree.
 
-An update that lands while a session is open updates the session too: its cards show their new text and a retired card drops out. In study mode, a card on screen that changed is shown again from its question, and only a session on screen takes ratings, so a rating always goes to text the user has just read. Uploading a deck's CSV again by hand restarts changed cards in the same way, in every deck built from that CSV. Another open tab running this version takes up the change and does the same. In that tab, a deck it had not seen starts selected, and so does each category that a selected deck brings on screen. Categories already on screen keep the user's picks, and a deck renamed elsewhere keeps its selection.
+An update that lands while a session is open updates the session too: its cards show their new text and a retired card drops out. In study mode, a card on screen that changed is shown again from its question, and only a session on screen takes ratings, so a rating always goes to text the user has just read. Uploading a deck's CSV again by hand restarts changed cards in the same way, in every deck built from that CSV. Another open tab running this version takes up the change and does the same. In that tab, a deck it had not seen starts selected, and so does each category that a selected deck brings on screen. Categories already on screen keep the user's picks, and a deck renamed elsewhere keeps its selection, except for identical old copies of one deck (see the last limit below).
 
 Limits:
 
