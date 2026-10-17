@@ -350,10 +350,10 @@ function allCats() {
   allCards().forEach(c => s.add(c.cat || UNCATEGORIZED));
   return [...s].sort();
 }
-// Whether a deck was built from this CSV, even renamed: its card ids start with the filename
+// Whether a deck was built from this CSV, even renamed: its card ids are the filename and a row number
 function isFromFile(d, file) {
   const c = d.cards && d.cards[0];
-  return !!c && typeof c.id === 'string' && c.id.startsWith(file + '_');
+  return !!c && typeof c.id === 'string' && c.id.startsWith(file + '_') && /^\d+$/.test(c.id.slice(file.length + 1));
 }
 function deckFromFile(file) {
   return S.decks.find(d => isFromFile(d, file));
@@ -506,14 +506,20 @@ function loadFile(file) {
     const cards = parseCSV(ev.target.result, file.name);
     if (!cards) { showFileError('Could not parse "' + file.name + '" — check it has question and answer columns.'); return; }
     const name = file.name.replace(/\.csv$/i, '');
-    // Re-uploading a file updates its deck, even one renamed or loaded as a default.
+    // Re-uploading a file updates its deck, even one renamed or loaded as a default, and
+    // every other deck built from it (older versions could hold two), so no two decks keep
+    // different text under one card id. Like an update, it restarts each studied card whose
+    // question or answer changed.
     // Which version an upload holds is unknown, so if it is a default's CSV, the next visit replaces it with the shipped one.
-    let deck = deckFromFile(file.name) || S.decks.find(d => d.name === name);
-    if (deck) { deck.cards = cards; delete deck.version; }
-    else S.decks.push(deck = {name, cards});
+    let decks = S.decks.filter(d => isFromFile(d, file.name));
+    if (!decks.length) decks = S.decks.filter(d => d.name === name);
+    decks.forEach(d => { replaceCards(d, cards); delete d.version; });
+    const deck = decks[0] || {name, cards};
+    if (!decks.length) S.decks.push(deck);
     S.selDecks.add(deck.name);
     cards.forEach(c => S.selCats.add(c.cat || UNCATEGORIZED));
-    saveDecks();
+    if (saveSRS()) saveDecks(); // the restarts first, so the new text is never stored without them
+    syncSession();
     renderDecks();
   };
   reader.onerror = () => showFileError('Failed to read "' + file.name + '".');
@@ -750,6 +756,13 @@ function backToSetup() {
   renderSetup();
 }
 
+// Whether the session is on screen. One left behind by a switch of tab stays in
+// memory but takes no keys or ratings, since nothing it holds can be read.
+function sessionShown() {
+  return document.getElementById('panel-study').classList.contains('active') &&
+         document.getElementById('session-view').style.display === 'block';
+}
+
 // ── Teach Mode ────────────────────────────────────────────────────────────
 function runTeach(originalCards) {
   _studyState  = null;
@@ -800,6 +813,16 @@ function runTeach(originalCards) {
       '<div class="stat-card"><div class="stat-val">' + n + '</div><div class="stat-lbl">cards seen</div></div>'
     );
   };
+  // Called by syncSession when a deck changes mid-session. Stays on the same card, or moves to the next if that one was retired.
+  window.teachSync = live => {
+    const before = cards.slice(0, idx).filter(c => live.has(c.id)).length;
+    originalCards = originalCards.map(c => currentCopy(c, live)).filter(Boolean);
+    cards = cards.map(c => currentCopy(c, live)).filter(Boolean);
+    seen  = new Set([...seen].filter(id => live.has(id)));
+    if (!cards.length) { backToSetup(); return; } // every card retired: nothing left to show
+    idx = Math.min(before, cards.length - 1);
+    if (document.querySelector('.teach-card')) render(); // not over the results
+  };
   render();
 }
 
@@ -819,8 +842,10 @@ function flipCard() {
 }
 
 function rate(q) {
-  if (!_studyState) return;
+  if (!_studyState || !_studyState.flipped || !sessionShown()) return; // only a card on screen, its answer shown
+  if (syncSession()) return; // the card on screen has just been corrected or retired: show that before taking a rating
   var card = _studyState.cards[_studyState.idx];
+  if (!card) return;
   updateSRS(card.id, q);
   if (q >= 3) _studyState.correct++;
   _studyState.total++;
@@ -883,9 +908,43 @@ function runStudy(cards) {
   renderStudyCard();
 }
 
+// ── Mid-session Deck Changes ──────────────────────────────────────────────
+// A session holds copies of its cards. When a deck's cards are replaced while
+// one is open (an update that lands mid-session, or an upload), its cards take
+// their new text and a retired card drops out, so a rating never lands on text
+// that has been replaced.
+
+// The cards as the decks now hold them, by deck name and id, and by id alone for
+// a copy whose deck has been renamed since the session began
+function liveCards() {
+  const live = new Map();
+  S.decks.forEach(d => d.cards.forEach(c => live.set(c.id, c).set(d.name + '\n' + c.id, c)));
+  return live;
+}
+// A session's copy of a card as its deck now holds it, or null once it is retired
+function currentCopy(c, live) {
+  const now = live.get(c.deckName + '\n' + c.id) || live.get(c.id);
+  if (!now) return null;
+  return now.q === c.q && now.a === c.a && now.cat === c.cat ? c : {...now, deckName: c.deckName};
+}
+// Returns whether the study card on screen changed. It is then shown again,
+// unflipped, so a correction is read before it can be rated.
+function syncSession() {
+  const live = liveCards();
+  if (_teachActive) window.teachSync(live);
+  if (!_studyState) return false;
+  const st = _studyState, shown = st.cards[st.idx];
+  st.cards = st.cards.slice(0, st.idx).concat(st.cards.slice(st.idx).map(c => currentCopy(c, live)).filter(Boolean));
+  if (!shown || st.cards[st.idx] === shown) return false;
+  st.flipped = false;
+  renderStudyCard();
+  return true;
+}
+
 // ── Keyboard Shortcuts ────────────────────────────────────────────────────
 document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (!sessionShown()) return;
   if (_teachActive && typeof window.teachStep === 'function') {
     if (e.key === 'ArrowLeft')  { e.preventDefault(); window.teachStep(-1); return; }
     if (e.key === 'ArrowRight') { e.preventDefault(); window.teachStep(1);  return; }
@@ -1062,7 +1121,7 @@ function loadDefaultDecks() {
     if (!changed || (saveSRS() && saveDecks())) saveSeen();
     if (!changed) return;
     if (!document.querySelector('.deck-name-input')) renderDecks(); // a rename in progress re-renders the list when it ends
-    if (_studyState || _teachActive) return; // never pull the view out from under a session
+    if (_studyState || _teachActive) { syncSession(); return; } // never pull the view out from under a session, only bring its cards up to date
     if (firstRun) showTab('study');
     else if (document.getElementById('panel-study').classList.contains('active'))    renderSetup();
     else if (document.getElementById('panel-progress').classList.contains('active')) renderProgress();

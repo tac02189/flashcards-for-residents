@@ -76,10 +76,13 @@ Every browser keeps its own copy of each deck it has loaded. To get a fix into t
 
 1. **Edit the CSV without moving any card.** A card's id is its row number, and saved progress is keyed by id. Change a card by editing its row in place, and add new cards at the end. Never insert, delete or reorder rows, the header included, and keep each card on one line: the app does not read line breaks inside a field.
    - To retire a card, delete its question and leave the rest of the row. The app skips a row without a question, and the rows below keep their numbers. Do not blank the whole line: blank lines, and in a tab-separated file lines of nothing but tabs, are dropped before rows are counted.
+   - Keep at least one card in the deck. A CSV with no cards left reads as a failed download, so browsers keep the copy they hold and download the file again on every visit. To withdraw a whole deck, remove it from `DEFAULT_DECKS`: a browser that does not hold it yet never receives it, but one that already holds it keeps that copy, which gets no further updates.
 2. **Count up the deck's `version`** in `DEFAULT_DECKS`, in the same commit as the CSV.
 3. **Deploy.**
 
 On its next visit, a browser that holds the deck at any other version downloads the CSV and replaces the deck's cards in place. So does one that holds it at an unknown version: a copy loaded before versions existed, or one uploaded by hand. The deck keeps the name the user gave it, its place in the list and its selection. Every unchanged card keeps its progress. A studied card whose question or answer changed starts over with a fresh schedule and is due at once, so the correction gets studied instead of waiting out an interval earned on the old text. If rows do shift, each shifted card no longer matches its old text, so it starts over instead of inheriting another card's progress.
+
+An update that lands while a session is open updates the session too: its cards show their new text and a retired card drops out. In study mode, a card on screen that changed is shown again from its question, and only a session on screen takes ratings, so a rating always goes to text the user has just read. Uploading a deck's CSV again by hand restarts changed cards in the same way, in every deck built from that CSV.
 
 Limits:
 
@@ -87,6 +90,7 @@ Limits:
 - An update arrives only on a visit with a connection. The page itself may be cached for up to an hour (Firebase Hosting's default), so a browser that opened the app just before the deploy can take that long to see it.
 - An update never brings back a deck the user removed.
 - A CSV uploaded by hand under a default's filename is that default, so its next update replaces it with the shipped CSV.
+- Saved progress is kept per card id, so two decks built from one CSV share it. Only older versions of the app could create such a pair. Updating a default, or uploading that CSV again, gives both decks the same text, but a pair of custom decks left with different text keeps sharing progress until then: rating a card in one reschedules the same card in the other.
 
 ---
 
