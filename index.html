@@ -326,25 +326,26 @@ const S = {
   quickFilter: null
 };
 
-function saveDecks() {
-  mergeStoredDecks();
-  try { localStorage.setItem('fc_decks', JSON.stringify(S.decks)); return true; } catch(e) { return false; }
+// Deck writes. Every change to the decks is applied to the decks as last
+// stored, to the decks it concerns, and the result is stored and taken up
+// here. So a tab never writes back decks it holds an out-of-date copy of: a
+// rename or removal changes only its own deck, and an upload or update only the
+// decks it replaces. Two tabs changing decks in the same instant can still lose
+// one change: localStorage has no transactions.
+let decksUnstored = false; // the last write failed, so this tab holds changes storage lacks
+function writeDecks() {
+  try { localStorage.setItem('fc_decks', JSON.stringify(S.decks)); decksUnstored = false; return true; }
+  catch(e) { decksUnstored = true; return false; }
 }
-// A tab that has not yet taken up a corrected default must not write its older
-// edition back over the current one another tab stored. So before decks are
-// written, a copy of a default held here at an older version takes the stored
-// copy of the current version, if there is one. A copy with no version is a
-// hand upload, a deliberate change, and is written as it is.
-function mergeStoredDecks() {
-  let stored = null;
-  try { stored = JSON.parse(localStorage.getItem('fc_decks')); } catch(e) {}
-  if (!Array.isArray(stored)) return;
-  S.decks.forEach(d => {
-    const def = DEFAULT_DECKS.find(x => x.file === deckSrc(d));
-    if (!def || d.version === undefined || d.version === def.version) return;
-    const s = stored.find(x => x && deckNs(x) === deckNs(d) && x.version === def.version);
-    if (s) { d.cards = s.cards; d.version = s.version; }
-  });
+// mutate(decks) changes the decks it is given, and returns false if it changed
+// nothing. Returns whether the result is stored.
+function commitDecks(mutate) {
+  let base = null;
+  if (!decksUnstored) { try { base = JSON.parse(localStorage.getItem('fc_decks')); } catch(e) {} }
+  if (!Array.isArray(base)) base = S.decks;
+  const changed = mutate(base) !== false;
+  S.decks = base;
+  return changed ? writeDecks() : true;
 }
 // Whether stored entry a should replace entry b held here: the later rating
 // wins; at equal times a stamped entry wins over an unstamped copy (stamping
@@ -377,7 +378,7 @@ function saveSRS() {
 // earned on. It is kept apart from fc_srs, which a tab still running an
 // earlier version of the app can rewrite without stamps.
 const SRS_FORMAT = 2;
-function saveToStorage() { saveDecks(); saveSRS(); }
+function saveToStorage() { writeDecks(); saveSRS(); }
 
 try {
   const d = localStorage.getItem('fc_decks');
@@ -412,12 +413,14 @@ function deckFromFile(file) {
   return S.decks.find(d => isFromFile(d, file));
 }
 // An id prefix for cards from this CSV that no deck uses yet
-function uniqueNs(file) {
-  if (!S.decks.some(d => deckNs(d) === file)) return file;
+function uniqueNs(file, decks = S.decks) {
+  if (!decks.some(d => deckNs(d) === file)) return file;
   let k = 2;
-  while (S.decks.some(d => deckNs(d) === file + '#' + k)) k++;
+  while (decks.some(d => deckNs(d) === file + '#' + k)) k++;
   return file + '#' + k;
 }
+// What identifies a deck: its card-id prefix, or its name if it has none
+function deckKey(d) { return deckNs(d) || 'name:' + d.name; }
 // A fingerprint of a card's question and answer. Progress is stamped with the
 // text it was earned on and counts only while the card still reads the same,
 // so a corrected card starts over however its correction arrived: an update,
@@ -603,18 +606,20 @@ function loadFile(file) {
     // own progress. Like an update, it restarts each studied card whose question or answer
     // changed: that card's progress was earned on the old text, so it no longer counts (progressOf).
     // Which version an upload holds is unknown, so if it is a default's CSV, the next visit replaces it with the shipped one.
-    let decks = S.decks.filter(d => isFromFile(d, file.name)), ns;
-    if (!decks.length) { decks = S.decks.filter(d => d.name === name); ns = uniqueNs(file.name); } // a deck of that name from another CSV takes this one, under fresh ids
-    decks.forEach(d => { replaceCards(d, cards, file.name, ns); delete d.version; });
-    let deck = decks[0];
-    if (!deck) { deck = { name }; replaceCards(deck, cards, file.name, uniqueNs(file.name)); S.decks.push(deck); }
-    S.selDecks.add(deck.name);
+    let deckName = name;
+    const stored = commitDecks(decks => {
+      let targets = decks.filter(d => isFromFile(d, file.name)), ns;
+      if (!targets.length) { targets = decks.filter(d => d.name === name); ns = uniqueNs(file.name, decks); } // a deck of that name from another CSV takes this one, under fresh ids
+      targets.forEach(d => { replaceCards(d, cards, file.name, ns); delete d.version; });
+      if (!targets.length) { const deck = { name }; replaceCards(deck, cards, file.name, uniqueNs(file.name, decks)); decks.push(deck); targets = [deck]; }
+      deckName = targets[0].name;
+    });
+    S.selDecks.add(deckName);
     cards.forEach(c => S.selCats.add(c.cat || UNCATEGORIZED));
-    const stored = saveDecks();
     // A default uploaded by hand is that default: recorded once it is stored, so removing it later keeps it removed
     if (stored && DEFAULT_DECKS.some(def => def.file === file.name)) markDefaultSeen(file.name);
     syncSession();
-    renderDecks();
+    redrawDecks();
     if (!stored) showFileError('Could not save "' + file.name + '": this browser\'s storage is full, so it will be gone when you leave the page.');
   };
   reader.onerror = () => showFileError('Failed to read "' + file.name + '".');
@@ -641,76 +646,94 @@ function renderDecks() {
     el.innerHTML = '<div class="empty"><div class="empty-icon">&#128218;</div><p><em>No decks yet</em> — upload a CSV to get started</p></div>';
     return;
   }
-  el.innerHTML = S.decks.map((d, i) => {
-    const cats = [...new Set(d.cards.map(c => c.cat || UNCATEGORIZED))];
-    return '<div class="deck-card" id="deck-row-' + i + '">' +
+  el.innerHTML = S.decks.map(d => {
+    const cats = [...new Set(d.cards.map(c => c.cat || UNCATEGORIZED))], key = keyArg(deckKey(d));
+    return '<div class="deck-card" data-key="' + esc(deckKey(d)) + '">' +
       '<div style="flex:1;min-width:0">' +
-      '<div class="deck-name" id="deck-name-' + i + '">' + esc(d.name) + '</div>' +
+      '<div class="deck-name">' + esc(d.name) + '</div>' +
       '<div class="deck-meta">' + d.cards.length + ' cards &middot; ' + cats.length + ' categor' + (cats.length===1?'y':'ies') + '</div>' +
       '</div>' +
       '<div class="deck-actions" style="display:flex;gap:6px;flex-shrink:0;align-items:center">' +
-      '<button class="btn-sm btn-rename" onclick="startRename(' + i + ')">Rename</button>' +
-      '<button class="btn-sm btn-danger" onclick="removeDeck(' + i + ')">Remove</button>' +
+      '<button class="btn-sm btn-rename" onclick="startRename(' + key + ')">Rename</button>' +
+      '<button class="btn-sm btn-danger" onclick="removeDeck(' + key + ')">Remove</button>' +
       '</div></div>';
   }).join('');
 }
+// Redraw the deck list after the decks change, keeping a rename that is open,
+// with what was typed, if its deck is still there
+function redrawDecks() {
+  const input = document.querySelector('.deck-name-input');
+  const open  = input && { key: input.dataset.key, value: input.value };
+  renderDecks();
+  if (!open || !rowOf(open.key)) return;
+  startRename(open.key);
+  const again = document.querySelector('.deck-name-input');
+  if (again) again.value = open.value;
+}
 
 // ── Deck Actions ──────────────────────────────────────────────────────────
-// A rename or removal acts on the deck its control was opened on, found again
-// by name when it is confirmed: a deck that arrives meanwhile can move it in
-// the list. If it is gone by then, nothing happens.
-// A deck name as a quoted JavaScript string inside an onclick attribute
-function nameArg(n) { return esc("'" + n.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"); }
+// Each row, and each rename or removal opened on it, is bound to its deck's
+// identity (deckKey), not its place in the list, and acts only on that deck as
+// last stored. If the deck is gone by then, nothing happens.
+// A deck key as a quoted JavaScript string inside an onclick attribute
+function keyArg(k) { return esc("'" + k.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"); }
+function rowOf(key) { return [...document.querySelectorAll('.deck-card')].find(r => r.dataset.key === key); }
 
-function startRename(i) {
-  const nameEl  = document.getElementById('deck-name-' + i);
-  const current = S.decks[i].name;
-  nameEl.innerHTML =
-    '<input class="deck-name-input" id="rename-input-' + i + '" type="text" value="' + esc(current) + '" maxlength="80" onclick="event.stopPropagation()">' +
+function startRename(key) {
+  const row = rowOf(key), deck = S.decks.find(d => deckKey(d) === key);
+  if (!row || !deck) { renderDecks(); return; }
+  row.querySelector('.deck-name').innerHTML =
+    '<input class="deck-name-input" type="text" value="' + esc(deck.name) + '" maxlength="80" onclick="event.stopPropagation()">' +
     '<div style="display:flex;gap:5px;margin-top:6px">' +
-    '<button class="btn-sm btn-rename" style="padding:4px 10px" onclick="commitRename(' + i + ',' + nameArg(current) + ')">Save</button>' +
+    '<button class="btn-sm btn-rename" style="padding:4px 10px" onclick="commitRename(' + keyArg(key) + ')">Save</button>' +
     '<button class="btn-sm" style="padding:4px 10px" onclick="renderDecks()">Cancel</button>' +
     '</div>';
-  const input = document.getElementById('rename-input-' + i);
+  const input = row.querySelector('.deck-name-input');
+  input.dataset.key = key;
   input.focus(); input.select();
   input.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  commitRename(i, current);
+    if (e.key === 'Enter')  commitRename(key);
     if (e.key === 'Escape') renderDecks();
   });
 }
 
-function commitRename(i, name) {
-  const input = document.getElementById('rename-input-' + i);
+function commitRename(key) {
+  const input = [...document.querySelectorAll('.deck-name-input')].find(x => x.dataset.key === key);
   if (!input) return;
-  const j = S.decks.findIndex(d => d.name === name);
-  if (j < 0) { renderDecks(); return; }
   const newName = input.value.trim();
   if (!newName) { renderDecks(); return; }
-  if (S.decks.some((d, k) => k !== j && d.name === newName)) {
-    input.style.borderColor = '#E24B4A'; input.focus(); return;
-  }
-  S.decks[j].name = newName;
-  saveDecks();
+  let clash = false, oldName = null;
+  commitDecks(decks => {
+    const d = decks.find(x => deckKey(x) === key);
+    if (!d) return false;
+    if (decks.some(x => x !== d && x.name === newName)) { clash = true; return false; }
+    oldName = d.name;
+    d.name = newName;
+  });
+  if (clash) { input.style.borderColor = '#E24B4A'; input.focus(); return; }
+  if (oldName !== null && S.selDecks.delete(oldName)) S.selDecks.add(newName); // a selected deck stays selected
   renderDecks();
 }
 
-function removeDeck(i) {
-  const row = document.getElementById('deck-row-' + i);
+function removeDeck(key) {
+  const row = rowOf(key);
   if (!row) return;
   row.querySelector('.deck-actions').innerHTML =
     '<span style="font-size:13px;color:var(--txt2)">Remove?</span>' +
-    '<button class="btn-sm btn-danger" onclick="confirmRemove(' + nameArg(S.decks[i].name) + ')">Yes</button>' +
+    '<button class="btn-sm btn-danger" onclick="confirmRemove(' + keyArg(key) + ')">Yes</button>' +
     '<button class="btn-sm" onclick="renderDecks()">No</button>';
 }
 
-function confirmRemove(name) {
-  const j = S.decks.findIndex(d => d.name === name);
-  if (j < 0) { renderDecks(); return; }
-  const gone = S.decks.splice(j, 1)[0];
-  saveDecks();
+function confirmRemove(key) {
+  let gone = null;
+  commitDecks(decks => {
+    const j = decks.findIndex(x => deckKey(x) === key);
+    if (j < 0) return false;
+    gone = decks.splice(j, 1)[0];
+  });
   // A default removed stays removed. It is recorded now, so neither a later
   // visit nor a download still in flight can bring it back.
-  DEFAULT_DECKS.forEach(def => { if (gone && isFromFile(gone, def.file)) markDefaultSeen(def.file); });
+  if (gone) DEFAULT_DECKS.forEach(def => { if (isFromFile(gone, def.file)) markDefaultSeen(def.file); });
   renderDecks();
 }
 
@@ -1251,31 +1274,40 @@ function loadDefaultDecks() {
     if (!cards) return;                                  // not fetched, or not the whole CSV: try again next visit
     // Categories already on screen keep the user's picks; the rest of a new or updated deck's start selected
     const shownCats = new Set(allCards().filter(c => S.selDecks.has(c.deckName)).map(c => c.cat || UNCATEGORIZED));
-    if (deckFromFile(def.file)) {
-      // Updated in place, so the deck keeps its name, its place and its selection
-      const decks = outdated(def);
-      if (!decks.length) return;
-      decks.forEach(d => { replaceCards(d, cards, def.file); d.version = def.version; });
-    } else {
-      if (defaultsSeen.has(def.file)) return;            // removed while the download was in flight: it stays removed
-      if (nameTaken(def)) return;                        // name taken meanwhile: try again next visit
-      if (!cards.length) return;                         // every card retired: nothing to add
-      // In the order DEFAULT_DECKS lists them, whichever arrives first
-      const later = DEFAULT_DECKS.slice(DEFAULT_DECKS.indexOf(def) + 1);
-      const at = S.decks.findIndex(d => later.some(x => isFromFile(d, x.file)));
-      const deck = { name: def.name, version: def.version };
-      replaceCards(deck, cards, def.file, uniqueNs(def.file));
-      S.decks.splice(at < 0 ? S.decks.length : at, 0, deck);
-      S.selDecks.add(def.name);
+    let changed = false, added = false;
+    // Applied to the decks as last stored. Its cards need no progress written
+    // with them (progressOf), so no partial write can store new text with
+    // progress earned on the old.
+    const stored = commitDecks(decks => {
+      const held = decks.filter(d => isFromFile(d, def.file));
+      if (held.length) {
+        // Updated in place, so each copy keeps its name, its place, its selection and its own card ids
+        const stale = held.filter(d => d.version !== def.version);
+        if (!stale.length) return false;                 // already current, perhaps through another tab
+        stale.forEach(d => { replaceCards(d, cards, def.file); d.version = def.version; });
+      } else {
+        if (defaultsSeen.has(def.file)) return false;    // removed while the download was in flight: it stays removed
+        if (decks.some(d => d.name === def.name)) return false; // name taken meanwhile: try again next visit
+        if (!cards.length) return false;                 // every card retired: nothing to add
+        // In the order DEFAULT_DECKS lists them, whichever arrives first
+        const later = DEFAULT_DECKS.slice(DEFAULT_DECKS.indexOf(def) + 1);
+        const at = decks.findIndex(d => later.some(x => isFromFile(d, x.file)));
+        const deck = { name: def.name, version: def.version };
+        replaceCards(deck, cards, def.file, uniqueNs(def.file, decks));
+        decks.splice(at < 0 ? decks.length : at, 0, deck);
+        added = true;
+      }
+      changed = true;
+    });
+    if (changed) {
+      if (added) S.selDecks.add(def.name);
+      cards.forEach(c => { const cat = c.cat || UNCATEGORIZED; if (!shownCats.has(cat)) S.selCats.add(cat); });
+      // Marked seen only once it is stored: with localStorage full it still
+      // shows this visit, and the next visit retries instead of losing it
+      if (stored) markDefaultSeen(def.file);
     }
-    cards.forEach(c => { const cat = c.cat || UNCATEGORIZED; if (!shownCats.has(cat)) S.selCats.add(cat); });
-    // Mark a deck seen only once it is stored: with localStorage full it still
-    // shows this visit, and the next visit retries instead of losing it. Its
-    // cards need no progress written with them (progressOf), so no partial
-    // write can store new text with progress earned on the old.
-    if (saveDecks()) markDefaultSeen(def.file);
-    if (!document.querySelector('.deck-name-input')) renderDecks(); // a rename in progress re-renders the list when it ends
-    if (firstRun && !shown) { shown = true; if (!sessionShown()) showTab('study'); }
+    redrawDecks();
+    if (changed && firstRun && !shown) { shown = true; if (!sessionShown()) showTab('study'); }
     refreshView();
   }));
 }
@@ -1283,23 +1315,31 @@ function loadDefaultDecks() {
 // ── Stored-data upkeep ────────────────────────────────────────────────────
 // Runs once per visit, before anything reads progress.
 // 1. Every deck records its source CSV and its card-id prefix (deckSrc, deckNs).
-// 2. Older versions could hold two copies of a deck built from one CSV under
-//    the same card ids, so the copies shared one schedule per card. A later
-//    copy whose text differs from the first at any shared id gets a prefix of
-//    its own, so each copy keeps its own progress from here on; uploads and
-//    updates still reach it through its source CSV. No one can tell which copy
-//    earned a shared entry where their texts differ, so it is credited to
-//    neither: it stays unstamped, which counts as fresh. Copies whose texts
-//    agree keep sharing, which is harmless.
+// 2. Older versions could hold two or more copies of a deck built from one CSV
+//    under the same card ids, so the copies shared one schedule per card. Each
+//    card id is checked across all the copies: it is ambiguous if they do not
+//    all read the same there. If any id is, every copy after the first gets a
+//    prefix of its own, so each keeps its own progress from here on; uploads
+//    and updates still reach it through its source CSV. Progress the copies
+//    agree on goes with each copy. Progress at an ambiguous id is credited to
+//    none of them: no one can tell which copy earned it, so it stays unstamped,
+//    which counts as fresh. Copies that agree everywhere keep sharing, harmlessly.
 // 3. The first time this version runs (fc_format below SRS_FORMAT), progress
 //    saved before fingerprints is stamped with the text its card shows now.
 //    Entries for no current card stay unstamped, and so does anything a tab
 //    still running an earlier version writes later: both count as fresh.
-// Returns whether everything is stored. Until it is, no deck text changes on
-// this visit (no default updates, no uploads), so none is stamped onto new text.
+// Stored in that order: progress, then fc_format, then the decks. If progress
+// or fc_format cannot be stored it stops there, with the decks unchanged in
+// storage, so a later visit starts again from the same decks and reaches the
+// same decisions. Returns false if stored progress still needs this and some
+// of it could not be stored: no deck text then changes on this visit
+// (no default updates, no uploads), so none is stamped onto new text. A browser
+// with nothing stored to carry over works as usual, even if it cannot store anything.
 function upkeep() {
   let format = 0;
   try { format = +localStorage.getItem('fc_format') || 0; } catch(e) {}
+  const migrating = format < SRS_FORMAT;
+  const legacy = migrating && Object.keys(S.srs).some(id => S.srs[id] && !S.srs[id].h);
   let decksChanged = false, srsChanged = false;
 
   S.decks.forEach(d => {
@@ -1311,15 +1351,25 @@ function upkeep() {
   S.decks.forEach(d => { const ns = deckNs(d); if (ns) sharing.set(ns, (sharing.get(ns) || []).concat([d])); });
   const ambiguous = new Set();
   sharing.forEach(decks => {
-    const first = new Map(decks[0].cards.map(c => [c.id, c]));
+    if (decks.length < 2) return;
+    const texts = new Map();                               // card id -> the texts the copies hold there
+    decks.forEach(d => d.cards.forEach(c => {
+      if (!texts.has(c.id)) texts.set(c.id, new Set());
+      texts.get(c.id).add(textPrint(c));
+    }));
+    const here = [...texts].filter(([, t]) => t.size > 1).map(([id]) => id);
+    if (!here.length) return;                              // every copy reads the same at every id
+    here.forEach(id => ambiguous.add(id));
     decks.slice(1).forEach(d => {
-      const differs = d.cards.filter(c => { const o = first.get(c.id); return o && (o.q !== c.q || o.a !== c.a); });
-      if (!differs.length) return;                       // same text at every shared id
-      differs.forEach(c => ambiguous.add(c.id));
       const old = deckNs(d), ns = uniqueNs(deckSrc(d));
       d.cards = d.cards.map(c => {
         const id = ns + c.id.slice(old.length), s = S.srs[c.id];
-        if (s && s.h === textPrint(c)) { S.srs[id] = s; srsChanged = true; } // progress earned on this copy's own text goes with it
+        // Progress this copy can be shown to have earned goes with it: stamped
+        // with its text, or (first run only) unstamped at an id the copies agree on
+        if (s && (s.h ? s.h === textPrint(c) : migrating && !ambiguous.has(c.id))) {
+          S.srs[id] = {...s, h: textPrint(c)};
+          srsChanged = true;
+        }
         return {...c, id};
       });
       d.ns = ns;
@@ -1327,18 +1377,19 @@ function upkeep() {
     });
   });
 
-  if (format < SRS_FORMAT) {
+  if (migrating) {
     S.decks.forEach(d => d.cards.forEach(c => {
       const s = S.srs[c.id];
       if (s && !s.h && !ambiguous.has(c.id)) { s.h = textPrint(c); srsChanged = true; }
     }));
   }
 
-  if (decksChanged) saveDecks();
-  if (srsChanged && !saveSRS()) return false;
-  if (format < SRS_FORMAT) {
-    try { localStorage.setItem('fc_format', String(SRS_FORMAT)); } catch(e) { return false; }
-  }
+  const needed = legacy || decksChanged;                   // stored data that must be carried over intact
+  if (srsChanged && !saveSRS()) return !needed;
+  if (migrating) { try { localStorage.setItem('fc_format', String(SRS_FORMAT)); } catch(e) { return !needed; } }
+  // Last, and safe to fail: with progress and fc_format stored, a later visit
+  // stamps nothing and re-keys the same copies the same way
+  if (decksChanged) writeDecks();
   return true;
 }
 
@@ -1365,7 +1416,7 @@ window.addEventListener('storage', e => {
     if (!S.selDecks.has(d.name)) return;
     d.cards.forEach(c => { const cat = c.cat || UNCATEGORIZED; if (!shownCats.has(cat)) S.selCats.add(cat); });
   });
-  if (!document.querySelector('.deck-name-input')) renderDecks();
+  redrawDecks();
   refreshView();
 });
 
