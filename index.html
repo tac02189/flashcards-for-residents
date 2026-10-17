@@ -1296,13 +1296,14 @@ function loadDefaultDecks() {
   // Each default is applied the moment it arrives, so one slow download holds up no other
   todo.forEach(def => fetchDefault(def).then(cards => {
     if (!cards) return;                                  // not fetched, or not the whole CSV: try again next visit
-    // Categories already on screen keep the user's picks; the rest of a new or updated deck's start selected
-    const shownCats = new Set(allCards().filter(c => S.selDecks.has(c.deckName)).map(c => c.cat || UNCATEGORIZED));
-    let changed = false, added = false;
+    let changed = false, added = false, shownCats = null;
     // Applied to the decks as last stored. Its cards need no progress written
     // with them (progressOf), so no partial write can store new text with
     // progress earned on the old.
     const stored = commitDecks(decks => {
+      // Categories on screen, once other tabs' changes are taken up, keep the
+      // user's picks; the rest of a new or updated deck's start selected
+      shownCats = new Set(allCards().filter(c => S.selDecks.has(c.deckName)).map(c => c.cat || UNCATEGORIZED));
       const held = decks.filter(d => isFromFile(d, def.file));
       if (held.length) {
         // Updated in place, so each copy keeps its name, its place, its selection and its own card ids
@@ -1331,7 +1332,8 @@ function loadDefaultDecks() {
       if (stored) markDefaultSeen(def.file);
     }
     redrawDecks();
-    if (changed && firstRun && !shown) { shown = true; if (!sessionShown()) showTab('study'); }
+    // A first visit opens ready to study, also when another tab installed this default first
+    if ((changed || deckFromFile(def.file)) && firstRun && !shown) { shown = true; if (!sessionShown()) showTab('study'); }
     refreshView();
   }));
 }

@@ -111,13 +111,13 @@ Limits:
   - Each change to the decks is applied to the decks as last stored, and changes only the decks it concerns, so a tab does not write back a deck it holds an out-of-date copy of. The exceptions:
     - two tabs changing decks close together can still lose one change;
     - a tab still running an older version of the app saves its whole copy;
-    - after one of its own deck writes fails, a tab works from its own copy until a write succeeds or a change arrives from another tab, which it takes up in place of its unsaved one. Until then, a later change there can restore decks that another tab has changed since.
+    - after one of its own deck writes fails, a tab works from its own copy until a write succeeds or it takes up a change from another tab, even a change made before its own write failed. Taking it up drops the unsaved change. Until then, a later change there can restore decks that another tab has changed since.
   - Ratings, renames and removals that cannot be stored are not reported.
   - If the browser cannot store a removal, the removed default can come back.
 - The one-time carrying over of data saved by an older version needs the browser to store it. Until it can, the app loads no default updates and takes no uploads, so that no progress is carried onto text it was not earned on. That holds even when there is no progress to carry over, only decks.
 - If that carrying over fails partway, removing one of two old copies of a deck before the next visit can lose the evidence that their shared progress was ambiguous. The progress can then be credited to the copy that remains.
 - Downloads of default decks time out after 30 seconds only in browsers that support aborting a download (all current ones do).
-- Older versions of the app could leave two or more copies of a deck built from one CSV under the same card ids, so the copies shared progress. If the copies do not all read the same at some card, every copy after the first gets ids of its own. Progress they all agree on goes with each copy. Unstamped progress at a card where they disagree starts over in all of them, since no one can tell which copy earned it. Copies that agree everywhere keep sharing progress, which is harmless to progress. But such copies also share one identity in the deck list, so Rename and Remove act on the first of them.
+- Older versions of the app could leave two or more copies of a deck built from one CSV under the same card ids, so the copies shared progress. If the copies do not all read the same at some card, every copy after the first gets ids of its own. Progress they all agree on goes with each copy. Unstamped progress at a card where they disagree starts over in all of them, since no one can tell which copy earned it. Copies that agree everywhere keep sharing progress, which is harmless to progress. But such copies also share one identity in the deck list, so Rename and Remove act on the first of them, and when one of them is renamed in another tab, this tab can select it even if it had been deselected here.
 
 ---
 
