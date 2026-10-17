@@ -340,12 +340,36 @@ function writeDecks() {
 // mutate(decks) changes the decks it is given, and returns false if it changed
 // nothing. Returns whether the result is stored.
 function commitDecks(mutate) {
-  let base = null;
-  if (!decksUnstored) { try { base = JSON.parse(localStorage.getItem('fc_decks')); } catch(e) {} }
-  if (!Array.isArray(base)) base = S.decks;
-  const changed = mutate(base) !== false;
-  S.decks = base;
+  let stored = null;
+  if (!decksUnstored) { try { stored = JSON.parse(localStorage.getItem('fc_decks')); } catch(e) {} }
+  if (Array.isArray(stored)) takeUpDecks(stored);  // other tabs' changes since, selected as their storage event would select them
+  const changed = mutate(S.decks) !== false;
   return changed ? writeDecks() : true;
+}
+// Take up a deck list read from storage, which may hold other tabs' changes:
+// after the first load, every route by which stored decks reach this tab goes
+// through here. Each deck keeps its selection, followed by its identity
+// (deckKey, else its name), so a deck renamed in another tab keeps it too. A
+// deck new to this tab starts selected, as a deck added here is. A selected
+// deck's categories that were not on screen start selected; those on screen
+// keep the user's picks.
+function takeUpDecks(decks) {
+  const shownCats = new Set(allCards().filter(c => S.selDecks.has(c.deckName)).map(c => c.cat || UNCATEGORIZED));
+  const namesByKey = new Map();                    // deck key -> the names this tab holds it under
+  S.decks.forEach(d => { const k = deckKey(d); namesByKey.set(k, (namesByKey.get(k) || []).concat([d.name])); });
+  const selDecks = new Set();
+  decks.forEach(d => {
+    const names = namesByKey.get(deckKey(d)) || (S.decks.some(x => x.name === d.name) ? [d.name] : null);
+    const selected = !names                 ? true                              // new to this tab
+                   : names.includes(d.name) ? S.selDecks.has(d.name)
+                   :                          names.some(n => S.selDecks.has(n)); // renamed elsewhere
+    if (!selected) return;
+    selDecks.add(d.name);
+    d.cards.forEach(c => { const cat = c.cat || UNCATEGORIZED; if (!shownCats.has(cat)) S.selCats.add(cat); });
+  });
+  S.selDecks = selDecks;
+  S.decks = decks;
+  decksUnstored = false;                           // this tab now holds what storage holds
 }
 // Whether stored entry a should replace entry b held here: the later rating
 // wins; at equal times a stamped entry wins over an unstamped copy (stamping
@@ -1403,19 +1427,12 @@ window.addEventListener('storage', e => {
     return;
   }
   if (e.key !== 'fc_decks') return;
+  // The decks as stored now, not as this event left them: a later write may have
+  // superseded it, and this tab may already have taken that up (commitDecks)
   let decks = null;
-  try { decks = JSON.parse(e.newValue); } catch(err) {}
+  try { decks = JSON.parse(localStorage.getItem('fc_decks')); } catch(err) {}
   if (!Array.isArray(decks)) return;
-  // As for an update here: categories already on screen keep the user's picks,
-  // and the rest of a new or changed deck's start selected
-  const shownCats = new Set(allCards().filter(c => S.selDecks.has(c.deckName)).map(c => c.cat || UNCATEGORIZED));
-  const known = new Set(S.decks.map(d => d.name));
-  S.decks = decks;
-  S.decks.forEach(d => {
-    if (!known.has(d.name)) S.selDecks.add(d.name);
-    if (!S.selDecks.has(d.name)) return;
-    d.cards.forEach(c => { const cat = c.cat || UNCATEGORIZED; if (!shownCats.has(cat)) S.selCats.add(cat); });
-  });
+  takeUpDecks(decks);
   redrawDecks();
   refreshView();
 });

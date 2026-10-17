@@ -87,7 +87,7 @@ Every browser keeps its own copy of each deck it has loaded. To get a fix into t
 2. **Count up the deck's `version`** in `DEFAULT_DECKS`, in the same commit as the CSV.
 3. **Deploy.**
 
-On its next visit with a connection, a browser that holds the deck at any other version downloads the CSV and replaces the deck's cards in place. So does one that holds it at an unknown version: a copy loaded before versions existed, or one uploaded by hand. The deck keeps the name the user gave it, its place in the list and its selection (but see Limits for two open tabs). Every unchanged card keeps its progress (but see below for old duplicate copies of a deck). A studied card whose question or answer changed starts over with a fresh schedule and is due at once, so the correction gets studied instead of waiting out an interval earned on the old text.
+On its next visit with a connection, a browser that holds the deck at any other version downloads the CSV and replaces the deck's cards in place. So does one that holds it at an unknown version: a copy loaded before versions existed, or one uploaded by hand. The deck keeps the name the user gave it, its place in the list and its selection. Every unchanged card keeps its progress (but see below for old duplicate copies of a deck). A studied card whose question or answer changed starts over with a fresh schedule and is due at once, so the correction gets studied instead of waiting out an interval earned on the old text.
 
 How that holds: saved progress is stamped with a 53-bit fingerprint of the question and answer it was earned on, and it counts only while the card reads the same. So a changed card starts over however its change arrived: an update, a hand upload, a second open tab, or a save that failed partway. If rows do shift, a shifted card whose text differs from the card that held its row starts over instead of inheriting that card's progress. Two rows with identical question and answer can trade places unnoticed. Progress belongs to text, not to a version: if a card changes and later changes back before it is studied again, the progress earned on the earlier text counts again.
 
@@ -98,7 +98,7 @@ Progress the app cannot place counts as fresh too: the card starts over rather t
 
 Progress already stamped with a copy's own text keeps counting for that copy, even where other copies disagree.
 
-An update that lands while a session is open updates the session too: its cards show their new text and a retired card drops out. In study mode, a card on screen that changed is shown again from its question, and only a session on screen takes ratings, so a rating always goes to text the user has just read. Uploading a deck's CSV again by hand restarts changed cards in the same way, in every deck built from that CSV. Another open tab running this version takes up the change and does the same.
+An update that lands while a session is open updates the session too: its cards show their new text and a retired card drops out. In study mode, a card on screen that changed is shown again from its question, and only a session on screen takes ratings, so a rating always goes to text the user has just read. Uploading a deck's CSV again by hand restarts changed cards in the same way, in every deck built from that CSV. Another open tab running this version takes up the change and does the same. In that tab, a deck it had not seen starts selected, and so does each category that a selected deck brings on screen. Categories already on screen keep the user's picks, and a deck renamed elsewhere keeps its selection.
 
 Limits:
 
@@ -111,8 +111,7 @@ Limits:
   - Each change to the decks is applied to the decks as last stored, and changes only the decks it concerns, so a tab does not write back a deck it holds an out-of-date copy of. The exceptions:
     - two tabs changing decks close together can still lose one change;
     - a tab still running an older version of the app saves its whole copy;
-    - after one of its own deck writes fails, a tab works from its own copy until a write succeeds. A later change there can then restore decks that another tab has changed since, and a change arriving from another tab can drop its unsaved one.
-  - A tab takes up the decks another tab stored, and when a change it makes takes up another tab's at the same time, a new category or a default installed by the other tab can stay unselected. The cards are there; select the category to study them.
+    - after one of its own deck writes fails, a tab works from its own copy until a write succeeds or a change arrives from another tab, which it takes up in place of its unsaved one. Until then, a later change there can restore decks that another tab has changed since.
   - Ratings, renames and removals that cannot be stored are not reported.
   - If the browser cannot store a removal, the removed default can come back.
 - The one-time carrying over of data saved by an older version needs the browser to store it. Until it can, the app loads no default updates and takes no uploads, so that no progress is carried onto text it was not earned on. That holds even when there is no progress to carry over, only decks.
