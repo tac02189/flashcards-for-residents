@@ -57,11 +57,18 @@ To change the default decks, edit the top of `index.html`:
 ```js
 const DEFAULT_DECKS = [
   { file: 'Foundations 2022.csv',         name: 'Foundations 2022', version: 1 },
-  { file: 'Tintinalli_EM_Flashcards.csv', name: 'Tintinalli',       version: 1 }
+  { file: 'Tintinalli_EM_Flashcards.csv', name: 'Tintinalli',       version: 3 }
 ];
 ```
 
-- `file` is the CSV in the repo root and the deck's identity. Card ids, and so saved progress, are built from it, and it is how the app recognizes the deck under any name: a default is not added over a copy the user uploaded by hand, and uploading the file again updates the existing deck instead of adding a second one. **Never rename a file once it has shipped.** A default CSV must open with its header row (`question,answer,category`): the app checks for it, so a login or error page served in the file's place is never loaded as the deck.
+- `file` is the CSV in the repo root and the deck's identity. Card ids, and so saved progress, are built from it, and it is how the app recognizes the deck under any name: a default is not added over a copy the user uploaded by hand, and uploading the file again updates the existing deck instead of adding a second one. **Never rename a file once it has shipped.**
+- A default CSV must pass four checks before the app replaces anything with it, so a login, error or half-delivered page served in the file's place is never loaded as the deck:
+  1. it opens with its header row (`question,answer,category`);
+  2. the quotes on every line balance;
+  3. every card has an answer;
+  4. it has at least as many rows as the copy it would replace, since rows are never deleted.
+
+  A file that fails is skipped, and browsers keep the copy they hold.
 - `name` is what the app displays.
 - `version` names the edition of the CSV. Start a new deck at `1`, and count up every time its CSV changes (next section).
 - Each browser receives each default once. A deck added to the list later reaches returning users on their next visit; a default the user removes stays removed, unless they remove every deck, which brings all the defaults back.
@@ -80,9 +87,11 @@ Every browser keeps its own copy of each deck it has loaded. To get a fix into t
 2. **Count up the deck's `version`** in `DEFAULT_DECKS`, in the same commit as the CSV.
 3. **Deploy.**
 
-On its next visit, a browser that holds the deck at any other version downloads the CSV and replaces the deck's cards in place. So does one that holds it at an unknown version: a copy loaded before versions existed, or one uploaded by hand. The deck keeps the name the user gave it, its place in the list and its selection. Every unchanged card keeps its progress. A studied card whose question or answer changed starts over with a fresh schedule and is due at once, so the correction gets studied instead of waiting out an interval earned on the old text. If rows do shift, each shifted card no longer matches its old text, so it starts over instead of inheriting another card's progress.
+On its next visit, a browser that holds the deck at any other version downloads the CSV and replaces the deck's cards in place. So does one that holds it at an unknown version: a copy loaded before versions existed, or one uploaded by hand. The deck keeps the name the user gave it, its place in the list and its selection. Every unchanged card keeps its progress. A studied card whose question or answer changed starts over with a fresh schedule and is due at once, so the correction gets studied instead of waiting out an interval earned on the old text.
 
-An update that lands while a session is open updates the session too: its cards show their new text and a retired card drops out. In study mode, a card on screen that changed is shown again from its question, and only a session on screen takes ratings, so a rating always goes to text the user has just read. Uploading a deck's CSV again by hand restarts changed cards in the same way, in every deck built from that CSV.
+How that is guaranteed: saved progress is stamped with a fingerprint of the question and answer it was earned on. It counts only while the card reads the same. So a changed card starts over however its change arrived: an update, a hand upload, a second open tab, or a save that failed partway. If rows do shift, a shifted card whose text differs from the card that held its row starts over instead of inheriting that card's progress. Two rows with identical question and answer can trade places unnoticed.
+
+An update that lands while a session is open updates the session too: its cards show their new text and a retired card drops out. In study mode, a card on screen that changed is shown again from its question, and only a session on screen takes ratings, so a rating always goes to text the user has just read. Uploading a deck's CSV again by hand restarts changed cards in the same way, in every deck built from that CSV. Progress saved in one open tab is merged into the others card by card, so no tab writes its older copy over another's ratings.
 
 Limits:
 
@@ -90,7 +99,7 @@ Limits:
 - An update arrives only on a visit with a connection. The page itself may be cached for up to an hour (Firebase Hosting's default), so a browser that opened the app just before the deploy can take that long to see it.
 - An update never brings back a deck the user removed.
 - A CSV uploaded by hand under a default's filename is that default, so its next update replaces it with the shipped CSV.
-- Saved progress is kept per card id, so two decks built from one CSV share it. Only older versions of the app could create such a pair. Updating a default, or uploading that CSV again, gives both decks the same text, but a pair of custom decks left with different text keeps sharing progress until then: rating a card in one reschedules the same card in the other.
+- Older versions of the app could leave two copies of a custom deck built from one CSV under the same card ids, so they shared progress. On every visit, a later copy whose text differs from the first gets card ids of its own, and its progress starts over. Two kinds of copies keep sharing ids: those with the same text, and copies of a default deck, since every update gives them all the same text. That is harmless, because progress counts only for the text it was earned on.
 
 ---
 
