@@ -8,7 +8,7 @@ A single-file flashcard study app with spaced repetition, built for CSV-based de
 
 ## Features
 
-- **Study mode** — SM-2 spaced repetition. Rate each card (Again / Hard / Good / Easy) and cards resurface based on how well you know them.
+- **Study mode** — SM-2 spaced repetition. Tap a card to see its answer, shown under its question, then rate it (Again / Hard / Good / Easy); cards resurface based on how well you know them.
 - **Teaching mode** — Browse all cards with answers visible. Good for a first pass through new material.
 - **Category filtering** — Cards are grouped by category. Select which categories to include before starting a session.
 - **Progress tracking** — Per-category performance bars showing Again / Hard / Good / Easy breakdown.
