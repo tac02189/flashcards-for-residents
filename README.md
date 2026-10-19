@@ -13,7 +13,7 @@ A single-file flashcard study app with spaced repetition, built for CSV-based de
 - **Category filtering** — Cards are grouped by category. Select which categories to include before starting a session.
 - **Progress tracking** — Per-category performance bars showing Again / Hard / Good / Easy breakdown.
 - **Default decks** — The CSVs listed in `DEFAULT_DECKS` load automatically, so a first visit opens ready to study. A corrected CSV, with its `version` counted up, reaches browsers that already hold the deck on their next visit with a connection (Limits below). Ships with *Foundations 2022* and *Tintinalli*.
-- **Persistent** — Decks and progress are saved in this browser's `localStorage`, so returning to the page in the same browser picks up where you left off. A change the browser cannot store (storage full or disabled) is not kept: it can be lost when the page closes, or sooner if a change from another tab arrives first.
+- **Persistent** — Decks and progress are saved in this browser's `localStorage`, so returning to the page in the same browser picks up where you left off. A change the browser cannot store (storage full or disabled) is not kept: it is lost when the page closes, or sooner, the next time the decks change in this tab or another. A newer version of a default deck is the exception: a tab keeps it over an older stored copy (Limits below).
 - **Dark mode** — Follows system preference.
 
 ---
@@ -98,7 +98,7 @@ Progress the app cannot place counts as fresh too: the card starts over rather t
 
 Progress already stamped with a copy's own text keeps counting for that copy, even where other copies disagree.
 
-An update that lands while a session is open updates the session too: its cards show their new text and a retired card drops out. In study mode, a card on screen that changed is shown again from its question, and only a session on screen takes ratings, so a rating always goes to text the user has just read. Uploading a deck's CSV again by hand restarts changed cards in the same way, in every deck built from that CSV. Another open tab running this version takes up the change and does the same. In that tab, a deck it had not seen starts selected, and so does each category that a selected deck brings on screen. Categories already on screen keep the user's picks, and a deck renamed elsewhere keeps its selection, except for identical old copies of one deck (see the last limit below).
+An update that lands while a session is open updates the session too: its cards show their new text and a retired card drops out. In study mode, a card on screen that changed is shown again from its question, and only a session on screen takes ratings, so a rating always goes to text the user has just read. Uploading a deck's CSV again by hand restarts changed cards in the same way, in every deck built from that CSV. Another open tab running this version takes up the change and does the same. In that tab, a deck it had not seen starts selected, and so does each category that a selected deck brings on screen. Categories already on screen keep the user's picks, and a deck renamed elsewhere keeps its selection.
 
 Limits:
 
@@ -110,14 +110,13 @@ Limits:
   - Progress saved in one open tab is merged into the others card by card, but two tabs saving close together can lose one rating, as can a tab whose clock is behind another's.
   - Each change to the decks is applied to the decks as last stored, and changes only the decks it concerns, so a tab does not write back a deck it holds an out-of-date copy of. The exceptions:
     - two tabs changing decks close together can still lose one change;
-    - a tab still running an older version of the app saves its whole copy;
-    - after one of its own deck writes fails, a tab works from its own copy until a write succeeds or it takes up a change from another tab, even a change made before its own write failed. Taking it up drops the unsaved change. Until then, a later change there can restore decks that another tab has changed since.
+    - a tab still running an older version of the app saves its whole copy.
+  - A deck change the browser cannot store, such as an upload too large for it, lasts only until the decks next change, in this tab or another. New versions win, though: a tab that holds a default deck at a later version than the stored copy keeps its own and stores it with its next deck change. So a tab running this version does not go back to a deck's old text, whatever an older tab or a failed write left in storage.
   - Ratings, renames and removals that cannot be stored are not reported.
   - If the browser cannot store a removal, the removed default can come back.
-- The one-time carrying over of data saved by an older version needs the browser to store it. Until it can, the app loads no default updates and takes no uploads, so that no progress is carried onto text it was not earned on. That holds even when there is no progress to carry over, only decks.
-- If that carrying over fails partway, removing one of two old copies of a deck before the next visit can lose the evidence that their shared progress was ambiguous. The progress can then be credited to the copy that remains.
+- The one-time carrying over of progress saved by an older version needs the browser to store it. If it cannot, the old progress is dropped from storage instead, so those cards can start as new on a later visit. Default updates and uploads go ahead either way.
 - Downloads of default decks time out after 30 seconds only in browsers that support aborting a download (all current ones do).
-- Older versions of the app could leave two or more copies of a deck built from one CSV under the same card ids, so the copies shared progress. If the copies do not all read the same at some card, every copy after the first gets ids of its own. Progress they all agree on goes with each copy. Unstamped progress at a card where they disagree starts over in all of them, since no one can tell which copy earned it. Copies that agree everywhere keep sharing progress, which is harmless to progress. But such copies also share one identity in the deck list, so Rename and Remove act on the first of them, and when one of them is renamed in another tab, this tab can select it even if it had been deselected here.
+- Older versions of the app could leave two or more copies of a deck built from one CSV under the same card ids, so the copies shared progress. Copies alike in every card are one deck: only the first is kept, under its name, and the others are removed. Otherwise every copy after the first gets ids of its own and is a deck of its own from then on. Progress they all agree on goes with each copy. Unstamped progress at a card where they disagree starts over in all of them, since no one can tell which copy earned it.
 
 ---
 

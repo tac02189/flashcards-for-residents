@@ -332,30 +332,45 @@ const S = {
 // stored, to the decks it concerns, and the result is stored and taken up
 // here. So a tab never writes back decks it holds an out-of-date copy of: a
 // rename or removal changes only its own deck, and an upload or update only the
-// decks it replaces. Two tabs changing decks in the same instant can still lose
-// one change: localStorage has no transactions.
-let decksUnstored = false; // the last write failed, so this tab holds changes storage lacks
+// decks it replaces. That holds after a write fails too: a change the browser
+// could not store goes when this tab next takes up the stored decks, except a
+// newer version of a default deck, which stays (takeUpDecks). Two tabs
+// changing decks in the same instant can still lose one change: localStorage
+// has no transactions.
 function writeDecks() {
-  try { localStorage.setItem('fc_decks', JSON.stringify(S.decks)); decksUnstored = false; return true; }
-  catch(e) { decksUnstored = true; return false; }
+  try { localStorage.setItem('fc_decks', JSON.stringify(S.decks)); return true; } catch(e) { return false; }
 }
 // mutate(decks) changes the decks it is given, and returns false if it changed
 // nothing. Returns whether the result is stored.
 function commitDecks(mutate) {
   let stored = null;
-  if (!decksUnstored) { try { stored = JSON.parse(localStorage.getItem('fc_decks')); } catch(e) {} }
-  if (Array.isArray(stored)) takeUpDecks(stored);  // other tabs' changes since, selected as their storage event would select them
+  try { stored = JSON.parse(localStorage.getItem('fc_decks')); } catch(e) {}
+  // Other tabs' changes since, selected as their storage event would select them
+  const kept = Array.isArray(stored) && takeUpDecks(stored);
   const changed = mutate(S.decks) !== false;
-  return changed ? writeDecks() : true;
+  return changed || kept ? writeDecks() : true;    // a newer version kept here is stored too
 }
 // Take up a deck list read from storage, which may hold other tabs' changes:
 // after the first load, every route by which stored decks reach this tab goes
-// through here. Each deck keeps its selection, followed by its identity
-// (deckKey, else its name), so a deck renamed in another tab keeps it too. A
-// deck new to this tab starts selected, as a deck added here is. A selected
-// deck's categories that were not on screen start selected; those on screen
-// keep the user's picks.
+// through here. New versions win: where this tab holds a default deck at a
+// later version than the stored copy (written by a tab running an older
+// version of the app, or stored before a write here failed), that copy takes
+// this tab's cards and version, so no corrected card goes back to its old
+// text. Returns whether any did. Each deck keeps its selection, followed by its
+// identity (deckKey, else its name), so a deck renamed in another tab keeps it
+// too. A deck new to this tab starts selected, as a deck added here is. A
+// selected deck's categories that were not on screen start selected; those on
+// screen keep the user's picks.
 function takeUpDecks(decks) {
+  const mine = new Map(S.decks.map(d => [deckKey(d), d]));
+  let kept = false;
+  decks.forEach(d => {
+    const h = mine.get(deckKey(d));
+    if (h && deckSrc(h) === deckSrc(d) && edition(h) > edition(d)) {
+      d.cards = h.cards; d.version = h.version; d.src = h.src; d.ns = h.ns;
+      kept = true;
+    }
+  });
   const shownCats = new Set(allCards().filter(c => S.selDecks.has(c.deckName)).map(c => c.cat || UNCATEGORIZED));
   const namesByKey = new Map();                    // deck key -> the names this tab holds it under
   S.decks.forEach(d => { const k = deckKey(d); namesByKey.set(k, (namesByKey.get(k) || []).concat([d.name])); });
@@ -371,8 +386,11 @@ function takeUpDecks(decks) {
   });
   S.selDecks = selDecks;
   S.decks = decks;
-  decksUnstored = false;                           // this tab now holds what storage holds
+  return kept;
 }
+// A deck's version as a number: a default deck's version, or 0 for a deck
+// uploaded by hand or stored before versions existed
+function edition(d) { return typeof d.version === 'number' ? d.version : 0; }
 // Whether stored entry a should replace entry b held here: the later rating
 // wins; at equal times a stamped entry wins over an unstamped copy (stamping
 // sets no time), and anything else is settled the same way in every tab, so
@@ -622,8 +640,6 @@ function showFileError(msg) {
 function loadFile(file) {
   const reader = new FileReader();
   reader.onload = ev => {
-    // Until this visit's progress stamps are stored, no deck text may change (upkeep)
-    if (!stampsStored) { showFileError('Could not save to this browser\'s storage, so "' + file.name + '" was not loaded. Free some space and reload.'); return; }
     const cards = parseCSV(ev.target.result, file.name);
     if (!cards) { showFileError('Could not parse "' + file.name + '" — check it has question and answer columns.'); return; }
     const name = file.name.replace(/\.csv$/i, '');
@@ -646,7 +662,8 @@ function loadFile(file) {
     if (stored && DEFAULT_DECKS.some(def => def.file === file.name)) markDefaultSeen(file.name);
     syncSession();
     redrawDecks();
-    if (!stored) showFileError('Could not save "' + file.name + '": this browser\'s storage is full, so it will be gone when you leave the page.');
+    // Shown for now, but gone by the next change to the decks here or in another tab (commitDecks)
+    if (!stored) showFileError('Could not save "' + file.name + '": this browser\'s storage is full, so it will not be kept.');
   };
   reader.onerror = () => showFileError('Failed to read "' + file.name + '".');
   reader.readAsText(file);
@@ -1350,30 +1367,29 @@ function loadDefaultDecks() {
 // Runs once per visit, before anything reads progress.
 // 1. Every deck records its source CSV and its card-id prefix (deckSrc, deckNs).
 // 2. Older versions could hold two or more copies of a deck built from one CSV
-//    under the same card ids, so the copies shared one schedule per card. Each
-//    card id is checked across all the copies: it is ambiguous if they do not
-//    all read the same there. If any id is, every copy after the first gets a
-//    prefix of its own, so each keeps its own progress from here on; uploads
-//    and updates still reach it through its source CSV. Progress the copies
-//    agree on goes with each copy. Progress at an ambiguous id is credited to
-//    none of them: no one can tell which copy earned it, so it stays unstamped,
-//    which counts as fresh. Copies that agree everywhere keep sharing, harmlessly.
+//    under the same card ids, so the copies shared one schedule per card.
+//    Copies alike in every card (id, question, answer and category) are one
+//    deck, so only the first is kept. Otherwise every copy after the first gets
+//    a prefix of its own, so each is a deck of its own from here on, with its
+//    own progress; uploads and updates still reach it through its source CSV.
+//    Each card id is checked across the copies: it is ambiguous if they do not
+//    all read the same there. Progress the copies agree on goes with each copy.
+//    Progress at an ambiguous id is credited to none of them: no one can tell
+//    which copy earned it, so it stays unstamped, which counts as fresh.
 // 3. The first time this version runs (fc_format below SRS_FORMAT), progress
 //    saved before fingerprints is stamped with the text its card shows now.
 //    Entries for no current card stay unstamped, and so does anything a tab
 //    still running an earlier version writes later: both count as fresh.
-// Stored in that order: progress, then fc_format, then the decks. If progress
-// or fc_format cannot be stored it stops there, with the decks unchanged in
-// storage, so a later visit starts again from the same decks and reaches the
-// same decisions. Returns false if stored progress still needs this and some
-// of it could not be stored: no deck text then changes on this visit
-// (no default updates, no uploads), so none is stamped onto new text. A browser
-// with nothing stored to carry over works as usual, even if it cannot store anything.
+// Stored in that order: progress, then fc_format, then the decks. Only that
+// first run stamps, so if it cannot store both its stamps and fc_format, the
+// unstamped progress in storage is forgotten instead (forgetUnstamped), and no
+// later run can stamp it onto text it was not earned on. Either way the visit
+// goes on with default updates and uploads: the decks are always the new
+// versions, and at worst some progress starts over.
 function upkeep() {
   let format = 0;
   try { format = +localStorage.getItem('fc_format') || 0; } catch(e) {}
   const migrating = format < SRS_FORMAT;
-  const legacy = migrating && Object.keys(S.srs).some(id => S.srs[id] && !S.srs[id].h);
   let decksChanged = false, srsChanged = false;
 
   S.decks.forEach(d => {
@@ -1386,14 +1402,20 @@ function upkeep() {
   const ambiguous = new Set();
   sharing.forEach(decks => {
     if (decks.length < 2) return;
+    const alike = d => JSON.stringify(d.cards.map(c => [c.id, c.q, c.a, c.cat]));
+    const first = alike(decks[0]);
+    if (decks.every(d => alike(d) === first)) {           // one deck held more than once: kept once
+      const extra = new Set(decks.slice(1));
+      S.decks = S.decks.filter(d => !extra.has(d));
+      decksChanged = true;
+      return;
+    }
     const texts = new Map();                               // card id -> the texts the copies hold there
     decks.forEach(d => d.cards.forEach(c => {
       if (!texts.has(c.id)) texts.set(c.id, new Set());
       texts.get(c.id).add(textPrint(c));
     }));
-    const here = [...texts].filter(([, t]) => t.size > 1).map(([id]) => id);
-    if (!here.length) return;                              // every copy reads the same at every id
-    here.forEach(id => ambiguous.add(id));
+    texts.forEach((t, id) => { if (t.size > 1) ambiguous.add(id); });
     decks.slice(1).forEach(d => {
       const old = deckNs(d), ns = uniqueNs(deckSrc(d));
       d.cards = d.cards.map(c => {
@@ -1418,13 +1440,29 @@ function upkeep() {
     }));
   }
 
-  const needed = legacy || decksChanged;                   // stored data that must be carried over intact
-  if (srsChanged && !saveSRS()) return !needed;
-  if (migrating) { try { localStorage.setItem('fc_format', String(SRS_FORMAT)); } catch(e) { return !needed; } }
-  // Last, and safe to fail: with progress and fc_format stored, a later visit
-  // stamps nothing and re-keys the same copies the same way
+  const stamped = !srsChanged || saveSRS();
+  if (migrating && !(stamped && storeFormat())) { forgetUnstamped(); storeFormat(); }
+  // Last, and safe to fail: a later visit re-keys the same copies the same way
   if (decksChanged) writeDecks();
-  return true;
+}
+function storeFormat() {
+  try { localStorage.setItem('fc_format', String(SRS_FORMAT)); return true; } catch(e) { return false; }
+}
+// Forget the progress no stamp ties to a text, here and in storage. Removing
+// entries frees space, so this write fits where the stamps did not; if even it
+// fails, all stored progress goes. This visit keeps the stamps it made: they
+// are stored with the next rating that fits.
+function forgetUnstamped() {
+  const stampedOnly = o => {
+    const r = {};
+    if (o && typeof o === 'object') for (const id in o) if (o[id] && o[id].h) r[id] = o[id];
+    return r;
+  };
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem('fc_srs')); } catch(e) {}
+  S.srs = stampedOnly(S.srs);
+  try { localStorage.setItem('fc_srs', JSON.stringify(stampedOnly(stored))); }
+  catch(e) { try { localStorage.removeItem('fc_srs'); } catch(e2) {} }
 }
 
 // ── Other Tabs ────────────────────────────────────────────────────────────
@@ -1448,7 +1486,7 @@ window.addEventListener('storage', e => {
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────
-const stampsStored = upkeep();
+upkeep();
 renderDecks();
 S.decks.forEach(d => S.selDecks.add(d.name));
 allCats().forEach(c => S.selCats.add(c));
@@ -1460,7 +1498,7 @@ if (S.decks.length > 0) {
   document.getElementById('panel-decks').classList.add('active');
   document.getElementById('tab-decks').classList.add('active');
 }
-if (stampsStored) loadDefaultDecks(); // else try next visit, once the progress stamps can be stored
+loadDefaultDecks();
 </script>
 </body>
 </html>
