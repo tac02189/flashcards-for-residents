@@ -350,9 +350,10 @@ function writeDecks() {
   try { localStorage.setItem('fc_decks', JSON.stringify(S.decks)); return true; } catch(e) { return false; }
 }
 // mutate(decks) changes the decks it is given, and returns false if it changed
-// nothing. Returns whether the result is stored. A change that leaves the
-// decks as they were, such as saving a name unchanged, writes nothing, so no
-// other tab is sent a needless copy of them.
+// nothing. Returns whether the result is stored; a change that leaves the
+// decks as they were, such as saving a name unchanged, writes nothing and
+// returns true, so no other tab is sent a needless copy of them (a later
+// version kept here then waits for a real change to be stored).
 function commitDecks(mutate) {
   let stored = null;
   try { stored = JSON.parse(localStorage.getItem('fc_decks')); } catch(e) {}
@@ -1396,13 +1397,13 @@ function loadDefaultDecks() {
 //    Entries for no current card stay unstamped, and so does anything a tab
 //    still running an earlier version writes later: both count as fresh.
 // Stored in that order: progress, then fc_format, then the decks. Only that
-// first run stamps, so if it cannot store both its stamps and fc_format, the
-// unstamped progress in storage is forgotten instead (forgetUnstamped), and no
-// later run can stamp it onto text it was not earned on. While fc_format
-// cannot be stored, no decks are stored either (writeDecks), since another tab
-// could write the forgotten progress back. Either way the visit goes on with
-// default updates and uploads, so the new versions load even then, and at
-// worst some progress starts over.
+// first run stamps, so if it cannot store both its stamps and fc_format, it
+// tries to forget the unstamped progress in storage instead (forgetUnstamped).
+// Whether or not that works, no decks are stored while fc_format cannot be
+// (writeDecks), so no later run can stamp old progress onto changed text, even
+// progress another tab writes back. Either way the visit goes on with default
+// updates and uploads, so the new versions load even then; the cost is some
+// progress starting over (and README: Limits).
 function upkeep() {
   let format = 0;
   try { format = +localStorage.getItem('fc_format') || 0; } catch(e) {}
@@ -1470,7 +1471,7 @@ function storeFormat() {
 }
 // Forget the progress no stamp ties to a text, here and in storage, and return
 // whether storage now holds none of it. Removing entries frees space, so the
-// rewrite fits where the stamps did not; if even it fails, all stored progress
+// rewrite usually fits where the stamps did not; if even it fails, all stored progress
 // is removed, if removing works. Storage that holds nothing unstamped is left
 // as it is. This visit
 // keeps the stamps it made: they are stored with the next rating that fits.
