@@ -57,7 +57,7 @@ To change the default decks, edit the top of `index.html`:
 ```js
 const DEFAULT_DECKS = [
   { file: 'Foundations 2022.csv',         name: 'Foundations 2022', version: 1 },
-  { file: 'Tintinalli_EM_Flashcards.csv', name: 'Tintinalli',       version: 3 }
+  { file: 'Tintinalli_EM_Flashcards.csv', name: 'Tintinalli',       version: 4 }
 ];
 ```
 
