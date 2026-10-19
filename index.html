@@ -350,16 +350,20 @@ function writeDecks() {
   try { localStorage.setItem('fc_decks', JSON.stringify(S.decks)); return true; } catch(e) { return false; }
 }
 // mutate(decks) changes the decks it is given, and returns false if it changed
-// nothing. Returns whether the result is stored; a change that leaves the
-// decks as they were, such as saving a name unchanged, writes nothing and
-// returns true, so no other tab is sent a needless copy of them (a later
-// version kept here then waits for a real change to be stored).
+// nothing; then nothing is written. A change that leaves the decks as they
+// were, such as saving a name unchanged, is not written either, so no other tab
+// is sent a needless copy of them (a later version kept here then waits for a
+// real change to be stored), but only when the decks were just taken up from a
+// stored list. Without one (none stored, or storage unreadable), this tab's
+// decks may hold a change that was never saved, so they are written. Returns
+// false only when a write was tried and failed.
 function commitDecks(mutate) {
   let stored = null;
   try { stored = JSON.parse(localStorage.getItem('fc_decks')); } catch(e) {}
-  if (Array.isArray(stored)) takeUpDecks(stored);  // other tabs' changes since, selected as their storage event would select them
-  const before = JSON.stringify(S.decks);
-  if (mutate(S.decks) === false || JSON.stringify(S.decks) === before) return true;
+  const fromStorage = Array.isArray(stored);
+  if (fromStorage) takeUpDecks(stored);  // other tabs' changes since, selected as their storage event would select them
+  const before = fromStorage && JSON.stringify(S.decks);
+  if (mutate(S.decks) === false || (fromStorage && JSON.stringify(S.decks) === before)) return true;
   return writeDecks();
 }
 // Take up a deck list read from storage, which may hold other tabs' changes:
